@@ -1,6 +1,5 @@
 {
-  "name": "face-follower",
-  "homepage": "https://Tensorboy2.github.io/face-follower",
+  "name": "face-tracker",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -27,6 +26,8 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.22",
     "globals": "^16.4.0",
-    "vite": "^7.1.7"
-  }
+    "vite": "^7.1.7",
+    "gh-pages": "^6.1.1"
+  },
+  "homepage": "https://Tensorboy2.github.io/face-tracker"
 }
