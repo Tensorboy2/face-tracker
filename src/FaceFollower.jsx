@@ -10,12 +10,7 @@ export default function FaceFollower() {
   const [status, setStatus] = useState("Initializing camera...");
   const [showBoxes, setShowBoxes] = useState(false);
 
-  const smooth = useRef({
-    x: 0,
-    y: 0,
-    zoom: 1,
-    initialized: false,
-  });
+  const smooth = useRef({ x: 0, y: 0, zoom: 1, initialized: false });
 
   // Load the model
   useEffect(() => {
@@ -88,11 +83,19 @@ export default function FaceFollower() {
       const vh = v.videoHeight;
       const s = smooth.current;
 
+      const drawMirrored = (ctx) => {
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.translate(-ctx.canvas.width, 0);
+      };
+      const restoreCtx = (ctx) => ctx.restore();
+
       if (showBoxes) {
-        // Box canvas
         const c = boxCanvasRef.current;
         const ctx = c.getContext("2d");
         ctx.clearRect(0, 0, c.width, c.height);
+
+        drawMirrored(ctx);
         ctx.drawImage(v, 0, 0, c.width, c.height);
 
         if (preds.length > 0) {
@@ -101,22 +104,37 @@ export default function FaceFollower() {
             const [x2, y2] = pred.bottomRight;
             const w = x2 - x;
             const h = y2 - y;
+
+            // Draw box (canvas is mirrored, no extra flip needed)
             ctx.strokeStyle = "#0f0";
             ctx.lineWidth = 2;
             ctx.strokeRect(x * (c.width / vw), y * (c.height / vh), w * (c.width / vw), h * (c.height / vh));
+
+            // Draw text: temporarily undo mirroring to make it readable
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform
             ctx.fillStyle = "#0f0";
             ctx.font = "16px sans-serif";
-            ctx.fillText(`${(pred.probability[0] * 100).toFixed(0)}%`, x * (c.width / vw), y * (c.height / vh) - 5);
+            // Flip X manually for text to match mirrored box
+            ctx.fillText(
+              `${(pred.probability[0] * 100).toFixed(0)}%`,
+              (vw - x2) * (c.width / vw),
+              y * (c.height / vh) - 5
+            );
+            ctx.restore();
           });
           setStatus(`${preds.length} face(s) detected`);
         } else {
           setStatus("No face detected");
         }
+
+        restoreCtx(ctx);
       } else {
-        // Zoom canvas
         const c = zoomCanvasRef.current;
         const ctx = c.getContext("2d");
         ctx.clearRect(0, 0, c.width, c.height);
+
+        drawMirrored(ctx);
 
         if (preds.length > 0) {
           const [x, y] = preds[0].topLeft;
@@ -148,6 +166,8 @@ export default function FaceFollower() {
           ctx.drawImage(v, 0, 0, c.width, c.height);
           setStatus("No face detected");
         }
+
+        restoreCtx(ctx);
       }
 
       requestAnimationFrame(loop);
@@ -170,7 +190,7 @@ export default function FaceFollower() {
         fontFamily: "sans-serif",
         textAlign: "center",
         padding: "1rem",
-        boxSizing: "border-box",
+        boxSizing: "border-box"
       }}
     >
       <h2 style={{ margin: "0.2em" }}>Face Tracker</h2>
@@ -180,7 +200,6 @@ export default function FaceFollower() {
 
       <video ref={videoRef} autoPlay muted playsInline style={{ display: "none" }} />
 
-      {/* Conditionally render canvases */}
       {!showBoxes ? (
         <canvas
           ref={zoomCanvasRef}
@@ -188,6 +207,9 @@ export default function FaceFollower() {
             borderRadius: "1rem",
             border: "2px solid #444",
             backgroundColor: "black",
+            width: "100%",
+            height: "auto",
+            maxHeight: "60vh"
           }}
         />
       ) : (
@@ -197,13 +219,15 @@ export default function FaceFollower() {
             borderRadius: "1rem",
             border: "2px solid #444",
             backgroundColor: "black",
+            width: "100%",
+            height: "auto",
+            maxHeight: "60vh"
           }}
         />
       )}
 
       <label style={{ marginTop: "0.5em" }}>
-        <input type="checkbox" checked={showBoxes} onChange={() => setShowBoxes(!showBoxes)} />{" "}
-        Show face boxes
+        <input type="checkbox" checked={showBoxes} onChange={() => setShowBoxes(!showBoxes)} /> Show face boxes
       </label>
 
       <div style={{ fontSize: "0.9rem", color: "#aaa", marginTop: "0.5em" }}>{status}</div>
