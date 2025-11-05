@@ -4,9 +4,11 @@ import "@tensorflow/tfjs";
 
 export default function FaceFollower() {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
+  const zoomCanvasRef = useRef(null);
+  const boxCanvasRef = useRef(null);
   const [model, setModel] = useState(null);
   const [status, setStatus] = useState("Initializing camera...");
+  const [showBoxes, setShowBoxes] = useState(false);
 
   const smooth = useRef({
     x: 0,
@@ -15,7 +17,7 @@ export default function FaceFollower() {
     initialized: false,
   });
 
-  // Load model
+  // Load the model
   useEffect(() => {
     blazeface.load().then(setModel);
   }, []);
@@ -24,66 +26,97 @@ export default function FaceFollower() {
   useEffect(() => {
     async function startCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
         setStatus("Looking for a face...");
       } catch (err) {
-        console.error("Camera error:", err);
+        console.error(err);
         setStatus("Camera access denied or unavailable.");
       }
     }
     startCamera();
   }, []);
 
-  // Adjust canvas to camera aspect ratio
+  // Adjust canvas sizes
+  const adjustCanvas = (canvas) => {
+    const v = videoRef.current;
+    if (!v || !canvas) return;
+    const vw = v.videoWidth || 640;
+    const vh = v.videoHeight || 480;
+
+    const maxWidth = window.innerWidth * 0.9;
+    const maxHeight = window.innerHeight * 0.5;
+    const aspect = vw / vh;
+    let width = maxWidth;
+    let height = width / aspect;
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height * aspect;
+    }
+
+    canvas.width = vw;
+    canvas.height = vh;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+  };
+
   useEffect(() => {
-    const resizeCanvas = () => {
-      const c = canvasRef.current;
-      const vw = videoRef.current?.videoWidth || 640;
-      const vh = videoRef.current?.videoHeight || 480;
-
-      // Compute max size that fits viewport
-      const maxWidth = window.innerWidth * 0.9;
-      const maxHeight = window.innerHeight * 0.5;
-
-      const aspect = vw / vh;
-      let width = maxWidth;
-      let height = width / aspect;
-
-      if (height > maxHeight) {
-        height = maxHeight;
-        width = height * aspect;
-      }
-
-      c.width = vw;
-      c.height = vh;
-
-      c.style.width = `${width}px`;
-      c.style.height = `${height}px`;
+    const resize = () => {
+      adjustCanvas(zoomCanvasRef.current);
+      adjustCanvas(boxCanvasRef.current);
     };
-
-    resizeCanvas();
-    window.addEventListener("resize", resizeCanvas);
-    return () => window.removeEventListener("resize", resizeCanvas);
-  }, [videoRef.current]);
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
 
   // Main loop
   useEffect(() => {
     if (!model) return;
     const v = videoRef.current;
-    const c = canvasRef.current;
-    const ctx = c.getContext("2d");
-    const alpha = 0.05; // smoothing
+    const alpha = 0.05;
 
     const loop = async () => {
-      if (v.readyState === 4 && v.videoWidth > 0) {
-        const preds = await model.estimateFaces(v, false);
-        const vw = v.videoWidth;
-        const vh = v.videoHeight;
-        const s = smooth.current;
+      if (v.readyState !== 4 || v.videoWidth === 0) {
+        requestAnimationFrame(loop);
+        return;
+      }
+
+      const preds = await model.estimateFaces(v, false);
+      const vw = v.videoWidth;
+      const vh = v.videoHeight;
+      const s = smooth.current;
+
+      if (showBoxes) {
+        // Box canvas
+        const c = boxCanvasRef.current;
+        const ctx = c.getContext("2d");
+        ctx.clearRect(0, 0, c.width, c.height);
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+
+        if (preds.length > 0) {
+          preds.forEach(pred => {
+            const [x, y] = pred.topLeft;
+            const [x2, y2] = pred.bottomRight;
+            const w = x2 - x;
+            const h = y2 - y;
+            ctx.strokeStyle = "#0f0";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x * (c.width / vw), y * (c.height / vh), w * (c.width / vw), h * (c.height / vh));
+            ctx.fillStyle = "#0f0";
+            ctx.font = "16px sans-serif";
+            ctx.fillText(`${(pred.probability[0] * 100).toFixed(0)}%`, x * (c.width / vw), y * (c.height / vh) - 5);
+          });
+          setStatus(`${preds.length} face(s) detected`);
+        } else {
+          setStatus("No face detected");
+        }
+      } else {
+        // Zoom canvas
+        const c = zoomCanvasRef.current;
+        const ctx = c.getContext("2d");
+        ctx.clearRect(0, 0, c.width, c.height);
 
         if (preds.length > 0) {
           const [x, y] = preds[0].topLeft;
@@ -93,40 +126,35 @@ export default function FaceFollower() {
           const cx = x + boxW / 2;
           const cy = y + boxH / 2;
 
-          // Automatic zoom based on face size
           const targetZoom = Math.min(2.5, Math.max(1, Math.min(vw, vh) / boxW));
-
-          setStatus(`Face detected`);
-
-          if (!s.initialized) {
-            Object.assign(s, { x: cx, y: cy, zoom: targetZoom, initialized: true });
-          } else {
+          if (!s.initialized) Object.assign(s, { x: cx, y: cy, zoom: targetZoom, initialized: true });
+          else {
             s.x = s.x * (1 - alpha) + cx * alpha;
             s.y = s.y * (1 - alpha) + cy * alpha;
             s.zoom = s.zoom * (1 - alpha) + targetZoom * alpha;
           }
+
+          const cropW = vw / s.zoom;
+          const cropH = vh / s.zoom;
+          const cropX = Math.max(0, Math.min(vw - cropW, s.x - cropW / 2));
+          const cropY = Math.max(0, Math.min(vh - cropH, s.y - cropH / 2));
+
+          ctx.drawImage(v, cropX, cropY, cropW, cropH, 0, 0, c.width, c.height);
+          setStatus("Face detected");
         } else {
-          setStatus("No face detected");
           s.x = s.x * (1 - alpha) + vw / 2 * alpha;
           s.y = s.y * (1 - alpha) + vh / 2 * alpha;
           s.zoom = s.zoom * (1 - alpha) + 1 * alpha;
+          ctx.drawImage(v, 0, 0, c.width, c.height);
+          setStatus("No face detected");
         }
-
-        const cropW = vw / s.zoom;
-        const cropH = vh / s.zoom;
-        const cropX = Math.max(0, Math.min(vw - cropW, s.x - cropW / 2));
-        const cropY = Math.max(0, Math.min(vh - cropH, s.y - cropH / 2));
-
-        ctx.save();
-        ctx.scale(-1, 1);
-        ctx.clearRect(-c.width, 0, c.width, c.height);
-        ctx.drawImage(v, cropX, cropY, cropW, cropH, -c.width, 0, c.width, c.height);
-        ctx.restore();
       }
+
       requestAnimationFrame(loop);
     };
+
     loop();
-  }, [model]);
+  }, [model, showBoxes]);
 
   return (
     <div
@@ -147,19 +175,36 @@ export default function FaceFollower() {
     >
       <h2 style={{ margin: "0.2em" }}>Face Tracker</h2>
       <p style={{ maxWidth: 500, color: "#ccc", margin: "0.2em" }}>
-        Automatically centers and zooms into your face.
+        Default mode zooms into the first detected face. Toggle below to see bounding boxes with confidence scores.
       </p>
 
       <video ref={videoRef} autoPlay muted playsInline style={{ display: "none" }} />
 
-      <canvas
-        ref={canvasRef}
-        style={{
-          borderRadius: "1rem",
-          border: "2px solid #444",
-          backgroundColor: "black",
-        }}
-      />
+      {/* Conditionally render canvases */}
+      {!showBoxes ? (
+        <canvas
+          ref={zoomCanvasRef}
+          style={{
+            borderRadius: "1rem",
+            border: "2px solid #444",
+            backgroundColor: "black",
+          }}
+        />
+      ) : (
+        <canvas
+          ref={boxCanvasRef}
+          style={{
+            borderRadius: "1rem",
+            border: "2px solid #444",
+            backgroundColor: "black",
+          }}
+        />
+      )}
+
+      <label style={{ marginTop: "0.5em" }}>
+        <input type="checkbox" checked={showBoxes} onChange={() => setShowBoxes(!showBoxes)} />{" "}
+        Show face boxes
+      </label>
 
       <div style={{ fontSize: "0.9rem", color: "#aaa", marginTop: "0.5em" }}>{status}</div>
     </div>
